@@ -387,6 +387,123 @@ html, body, #root {
   color: var(--text-muted);
 }
 
+/* Attached screenshot in message stream */
+.msg-img-container {
+  margin-bottom: 8px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  max-width: 480px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.msg-screenshot {
+  width: 100%;
+  height: auto;
+  max-height: 280px;
+  object-fit: cover;
+  display: block;
+  cursor: pointer;
+  transition: opacity 150ms ease;
+}
+
+.msg-screenshot:hover {
+  opacity: 0.9;
+}
+
+/* Attachment preview bar above composer textarea */
+.attachment-preview-bar {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.attachment-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(30, 30, 38, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  padding: 4px 10px 4px 6px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-secondary);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.attachment-thumb {
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.remove-attachment-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: color 150ms ease;
+}
+
+.remove-attachment-btn:hover {
+  color: #ef4444;
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.capture-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 150ms ease;
+}
+
+.capture-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+.capture-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.capture-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .send-trigger {
   width: 30px;
   height: 30px;
@@ -419,3 +536,4 @@ html, body, #root {
   font-family: var(--font-sans);
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
+

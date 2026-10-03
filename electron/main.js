@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, screen } = require('electron');
 const path = require('path');
 
 function createWindow() {
@@ -42,6 +42,40 @@ function createWindow() {
     }
   });
   ipcMain.on('window:close', () => win.close());
+
+  // Full-screen capture IPC handler
+  ipcMain.handle('capture-screen', async () => {
+    const allWins = BrowserWindow.getAllWindows();
+    const activeWin = allWins[0];
+
+    // Hide window briefly so screenshot captures the clean desktop/apps behind it
+    if (activeWin) activeWin.setOpacity(0);
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    try {
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.size;
+      const factor = primaryDisplay.scaleFactor || 1;
+
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: {
+          width: Math.round(width * factor),
+          height: Math.round(height * factor),
+        },
+      });
+
+      if (activeWin) activeWin.setOpacity(1);
+
+      if (sources && sources.length > 0) {
+        return sources[0].thumbnail.toDataURL();
+      }
+    } catch (err) {
+      console.error('Failed to capture screen:', err);
+      if (activeWin) activeWin.setOpacity(1);
+    }
+    return null;
+  });
 }
 
 app.whenReady().then(() => {

@@ -4,5 +4,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window:minimize'),
   maximize: () => ipcRenderer.send('window:maximize'),
   close: () => ipcRenderer.send('window:close'),
+  captureScreen: () => ipcRenderer.invoke('capture-screen'),
   platform: process.platform,
 });
