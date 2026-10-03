@@ -88,13 +88,36 @@ export function App() {
 
   return (
     <div className="minimal-app">
-      {/* Top drag strip & optional clear action */}
+      {/* Top drag strip with clear action and window controls */}
       <div className="titlebar-strip">
-        {messages.length > 0 && (
-          <button className="clear-btn" onClick={() => setMessages([])}>
-            Clear
+        <div className="titlebar-left">
+          {messages.length > 0 && (
+            <button className="clear-btn" onClick={() => setMessages([])}>
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="titlebar-controls">
+          <button
+            className="win-btn"
+            title="Minimize"
+            onClick={() => window.electronAPI?.minimize()}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
           </button>
-        )}
+          <button
+            className="win-btn close"
+            title="Close"
+            onClick={() => window.electronAPI?.close()}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Main Chat Scroll View */}
