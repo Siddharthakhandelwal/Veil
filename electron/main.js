@@ -1,5 +1,27 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut } = require('electron');
 const path = require('path');
+
+function toggleWindow() {
+  const allWins = BrowserWindow.getAllWindows();
+  if (allWins.length === 0) {
+    createWindow();
+    return;
+  }
+  const win = allWins[0];
+
+  if (win.isMinimized()) {
+    win.restore();
+    win.show();
+    win.focus();
+  } else if (!win.isVisible()) {
+    win.show();
+    win.focus();
+  } else if (!win.isFocused()) {
+    win.focus();
+  } else {
+    win.minimize();
+  }
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -81,11 +103,30 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
 
+  // Register global shortcuts for toggle (both Capslock and Alt+A)
+  const shortcuts = ['Capslock', 'Alt+A'];
+  shortcuts.forEach((key) => {
+    try {
+      const success = globalShortcut.register(key, () => {
+        toggleWindow();
+      });
+      if (success) {
+        console.log(`Global shortcut registered: ${key}`);
+      }
+    } catch (e) {
+      console.log(`Shortcut failed for ${key}:`, e.message);
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on('window-all-closed', () => {
