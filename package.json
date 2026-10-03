@@ -1,0 +1,26 @@
+{
+  "name": "stealth-ai-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Stealth AI - Desktop Chat Application",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev:vite": "vite",
+    "dev:electron": "wait-on http://localhost:5173 && electron .",
+    "dev": "concurrently -k \"npm run dev:vite\" \"npm run dev:electron\"",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "vite"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "electron": "^33.2.1",
+    "vite": "^5.4.11",
+    "wait-on": "^8.0.1"
+  }
+}
