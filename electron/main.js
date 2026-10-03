@@ -1,5 +1,8 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut } = require('electron');
 const path = require('path');
+const { spawn } = require('child_process');
+
+let psProcess = null;
 
 function toggleWindow() {
   const allWins = BrowserWindow.getAllWindows();
@@ -9,17 +12,51 @@ function toggleWindow() {
   }
   const win = allWins[0];
 
-  if (win.isMinimized()) {
-    win.restore();
-    win.show();
-    win.focus();
-  } else if (!win.isVisible()) {
-    win.show();
-    win.focus();
-  } else if (!win.isFocused()) {
-    win.focus();
+  if (win.isVisible() && !win.isMinimized()) {
+    console.log('[toggleWindow] Window is visible -> hiding');
+    win.hide();
   } else {
-    win.minimize();
+    console.log('[toggleWindow] Window is hidden/minimized -> showing and focusing');
+    if (win.isMinimized()) {
+      win.restore();
+    }
+    win.show();
+    win.focus();
+  }
+}
+
+function startNativeKeyHook() {
+  const hookScript = path.join(__dirname, 'keylistener.ps1');
+  console.log('[startNativeKeyHook] Launching keylistener:', hookScript);
+
+  try {
+    psProcess = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', hookScript,
+    ], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    psProcess.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      if (text.includes('TRIGGER_HOTKEY')) {
+        console.log('[Native Hook] Caps+A detected! Toggling window...');
+        toggleWindow();
+      }
+    });
+
+    psProcess.stderr.on('data', (err) => {
+      console.error('[KeyHook Stderr]:', err.toString());
+    });
+
+    psProcess.on('exit', (code) => {
+      console.log('[KeyHook process exited]:', code);
+    });
+  } catch (e) {
+    console.error('[Failed to spawn keyhook]:', e);
   }
 }
 
@@ -55,7 +92,10 @@ function createWindow() {
   }
 
   // Window control IPC handlers
-  ipcMain.on('window:minimize', () => win.minimize());
+  ipcMain.on('window:minimize', () => {
+    console.log('[window:minimize] Hiding window');
+    win.hide();
+  });
   ipcMain.on('window:maximize', () => {
     if (win.isMaximized()) {
       win.unmaximize();
@@ -103,20 +143,18 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
 
-  // Register global shortcuts for toggle (both Capslock and Alt+A)
-  const shortcuts = ['Capslock', 'Alt+A'];
-  shortcuts.forEach((key) => {
-    try {
-      const success = globalShortcut.register(key, () => {
-        toggleWindow();
-      });
-      if (success) {
-        console.log(`Global shortcut registered: ${key}`);
-      }
-    } catch (e) {
-      console.log(`Shortcut failed for ${key}:`, e.message);
-    }
-  });
+  // Start native low-level Caps+A keyboard hook
+  startNativeKeyHook();
+
+  // Register Alt+A as secondary standard shortcut
+  try {
+    globalShortcut.register('Alt+A', () => {
+      console.log('[HOTKEY TRIGGERED]: Alt+A');
+      toggleWindow();
+    });
+  } catch (e) {
+    console.log('Alt+A registration error:', e);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -126,6 +164,10 @@ app.whenReady().then(() => {
 });
 
 app.on('will-quit', () => {
+  if (psProcess) {
+    psProcess.kill();
+    psProcess = null;
+  }
   globalShortcut.unregisterAll();
 });
 

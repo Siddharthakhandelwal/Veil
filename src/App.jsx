@@ -287,7 +287,7 @@ export function App() {
             </button>
           </div>
         </div>
-        <div className="dock-hint">Return to send · Shift+Return for newline · Alt+A or Caps to show/hide</div>
+        <div className="dock-hint">Return to send · Shift+Return for newline · Caps+A to show/hide</div>
       </div>
     </div>
   );
