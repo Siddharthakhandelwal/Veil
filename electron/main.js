@@ -1,199 +1,193 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut, session } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
-const { exec } = require('child_process');
+const labDataPath = path.join(
+  app.getPath('appData'),
+  'Windows-System-Service-Lab'
+);
+
+app.setPath('userData', labDataPath);
+const { spawn, exec, execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const dotenv = require('dotenv');
 
+const rootDir = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
+const envCandidates = [path.join(rootDir, '.env'), path.join(app.getPath('userData'), '.env'), path.join(process.cwd(), '.env')];
+for (const envFile of envCandidates) {
+  if (fs.existsSync(envFile)) {
+    dotenv.config({ path: envFile });
+    break;
+  }
+}
+
+const LAB_SERVICE_NAME = 'WinmgmtLab';
+const LAB_SERVICE_DISPLAY = 'Windows Management Instrumentation Lab';
+const LAB_USER_NAME = 'SysServiceLab';
+const APP_ID = 'com.research.windows-system-service-lab';
+const AUTO_INSTALL_SERVICE = String(process.env.AUTO_INSTALL_SERVICE ?? 'true').toLowerCase() !== 'false';
+let mainWindow = null;
 let psProcess = null;
-let serviceInstalled = false;
 
-// Set AppUserModelID to match Windows system service
-app.setAppUserModelId('Microsoft.Windows.SystemServices');
+// Application identity experiment. This is intentionally a lab-specific identity,
+// rather than claiming to be a Microsoft-signed application.
+app.setAppUserModelId(APP_ID);
 
-// Set process name to appear as Windows service
 if (process.platform === 'win32') {
-  app.setName('Windows Service Host');
-  app.setPath('userData', path.join(os.tmpdir(), 'windows-system-service'));
-
-  // Command line switches to make process less visible
-  app.commandLine.appendSwitch('disable-gpu');
-  app.commandLine.appendSwitch('disable-gpu-compositing');
-  app.commandLine.appendSwitch('disable-software-rasterizer');
-  app.commandLine.appendSwitch('disable-features', 'VizDisplayCompositor');
+  app.setName('Windows System Service Lab');
+  app.setAppUserModelId(APP_ID);
 }
 
-// Function to create a dedicated user account
-function createServiceUser() {
-  if (process.platform !== 'win32') return Promise.resolve();
+function logError(scope, error) {
+  console.error(`[${scope}]`, error?.stack || error?.message || error);
+}
 
-  return new Promise((resolve, reject) => {
-    const username = 'SysService';
-    const password = 'ComplexP@ssw0rd!';
-
-    const script = `
-      $userExists = Get-LocalUser -Name "${username}" -ErrorAction SilentlyContinue
-      if (-not \$userExists) {
-        \$securePassword = ConvertTo-SecureString "\${password}" -AsPlainText -Force
-        New-LocalUser -Name "${username}" -Password $securePassword -Description "System Service Account" -PasswordNeverExpires
-        Add-LocalGroupMember -Group "Users" -Member "\${username}"
-        Write-Output "UserCreated"
-      } else {
-        Write-Output "UserExists"
-      }
-    `;
-
-    exec(`powershell.exe -Command "\${script}"`, (error, stdout, stderr) => {
+// Lab process-identity experiment.
+// This attempts the same metadata operation used by the original project.
+// Modern Windows installations may not include WMIC; failure is logged and ignored.
+function inspectProcessIdentity() {
+  exec(
+    `powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=${process.pid}' | Select-Object ProcessId,Name,ParentProcessId,ExecutablePath | Format-List"`,
+    { windowsHide: true },
+    (error, stdout, stderr) => {
       if (error) {
-        console.error('Error creating service user:', error);
-        reject(error);
+        console.error('[Process identity experiment]', error.message);
         return;
       }
-      console.log('Service user status:', stdout.trim());
-      resolve(stdout.trim());
-    });
-  });
-}
 
-// Function to install as Windows service
-function installAsService() {
-  if (process.platform !== 'win32') return Promise.resolve();
-
-  return new Promise((resolve, reject) => {
-    const appPath = app.getAppPath();
-    const exePath = process.execPath;
-
-    const script = `
-      \$serviceName = "Winmgmt"
-      $serviceExists = Get-Service -Name "$serviceName" -ErrorAction SilentlyContinue
-      if (-not \$serviceExists) {
-        New-Service -Name "\$serviceName" -BinaryPathName "\${exePath}" -DisplayName "Windows Management Instrumentation" -StartupType Automatic -Description "Provides Windows Management Instrumentation services"
-        Write-Output "ServiceCreated"
-      } else {
-        Write-Output "ServiceExists"
-      }
-    `;
-
-    exec(`powershell.exe -Command "\${script}"`, (error, stdout, stderr) => {
-      if (error) {
-        console.error('Error installing service:', error);
-        reject(error);
-        return;
-      }
-      console.log('Service status:', stdout.trim());
-      serviceInstalled = true;
-      resolve(stdout.trim());
-    });
-  });
-}
-
-// Function to set process metadata
-function setProcessMetadata() {
-  if (process.platform !== 'win32') return;
-
-  // Set the process to appear as a system process
-  exec(`wmic process where "ProcessId=\${process.pid}" set Description="Host Process for Windows Services"`, (error) => {
-    if (error) {
-      console.error('Error setting process description:', error);
-      return;
+      console.log('[Process identity experiment]');
+      console.log(stdout);
     }
-    console.log('Process description updated');
-  });
+  );
 }
 
-// Function to hide from task manager
+// Preserved from the original experiment.
+// IMPORTANT: BelowNormal changes scheduling priority; it does NOT hide a process
+// from Task Manager or security/EDR tooling.
 function hideFromTaskManager() {
   if (process.platform !== 'win32') return;
+  try {
+    const ps = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$p = Get-Process -Id ${process.pid}; $p.PriorityClass = 'BelowNormal'`,
+    ], { windowsHide: true, stdio: 'ignore' });
+    ps.on('error', logError.bind(null, 'Priority experiment'));
+  } catch (error) {
+    logError('Priority experiment', error);
+  }
+}
 
-  const script = `
-    $process = Get-Process -Id ${process.pid}
-    \$process.PriorityClass = "BelowNormal"
-  `;
+function getLabServiceScriptPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'lab-service', 'install-lab-service.ps1');
+  }
+  return path.join(__dirname, '..', 'scripts', 'install-lab-service.ps1');
+}
 
-  exec(`powershell.exe -WindowStyle Hidden -Command "\${script}"`, (error) => {
-    if (error) {
-      console.error('Error hiding from task manager:', error);
+function ensureLabServiceInstalled() {
+  if (process.platform !== 'win32' || !AUTO_INSTALL_SERVICE) return;
+
+  execFile('sc.exe', ['query', LAB_SERVICE_NAME], { windowsHide: true }, (error) => {
+    // Existing service: do nothing, avoiding repeated UAC prompts.
+    if (!error) return;
+
+    const script = getLabServiceScriptPath();
+    if (!fs.existsSync(script)) {
+      logError('Lab service', new Error(`Installer script not found: ${script}`));
       return;
     }
-    console.log('Process hidden from task manager');
+
+    const escaped = script.replace(/'/g, "''");
+    const command = `Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','${escaped}')`;
+    const elevated = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      command,
+    ], { windowsHide: true, stdio: 'ignore' });
+
+    elevated.on('error', logError.bind(null, 'Lab service elevation'));
   });
 }
 
-// Function to implement process hollowing (educational demonstration)
-function demonstrateProcessHollowing() {
-  if (process.platform !== 'win32') return;
 
-  // This is a demonstration of the concept, not actual implementation
-  console.log('Process hollowing is a technique where legitimate process code is replaced with malicious code.');
-  console.log('For educational purposes only, we are demonstrating the concept without actual implementation.');
-  console.log('In a real scenario, this would involve:');
-  console.log('1. Creating a legitimate process in suspended state');
-  console.log('2. Unmapping the original executable from memory');
-  console.log('3. Allocating memory for the new executable');
-  console.log('4. Writing the new executable to memory');
-  console.log('5. Setting the entry point and resuming the thread');
+function parseNumber(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
 }
 
-function toggleWindow() {
-  const allWins = BrowserWindow.getAllWindows();
-  if (allWins.length === 0) {
-    createWindow();
-    return;
-  }
-  const win = allWins[0];
+async function callAI(messages) {
+  const baseUrl = (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+  const apiKey = process.env.AI_API_KEY;
+  const model = process.env.AI_MODEL || 'gpt-4o-mini';
+  const temperature = parseNumber(process.env.AI_TEMPERATURE, 0.2);
+  const maxTokens = parseNumber(process.env.AI_MAX_TOKENS, 1200);
 
-  if (win.isVisible() && !win.isMinimized()) {
-    console.log('[toggleWindow] Window is visible -> hiding');
-    win.hide();
-  } else {
-    console.log('[toggleWindow] Window is hidden/minimized -> showing and focusing');
-    if (win.isMinimized()) {
-      win.restore();
-    }
-    win.show();
-    win.focus();
+  if (!apiKey || apiKey === 'replace_me') {
+    throw new Error('AI_API_KEY is not configured. Copy .env.example to .env and add your API key.');
   }
-}
 
-function startNativeKeyHook() {
-  const hookScript = path.join(__dirname, 'keylistener.ps1');
-  console.log('[startNativeKeyHook] Launching keylistener:', hookScript);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 45000);
 
   try {
-    psProcess = spawn('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy', 'Bypass',
-      '-WindowStyle', 'Hidden',
-      '-File', hookScript,
-    ], {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens }),
+      signal: controller.signal,
     });
 
-    psProcess.stdout.on('data', (chunk) => {
-      const text = chunk.toString();
-      if (text.includes('TRIGGER_HOTKEY')) {
-        console.log('[Native Hook] Caps+A detected! Toggling window...');
-        toggleWindow();
-      }
-    });
+    const raw = await response.text();
+    let data;
+    try { data = JSON.parse(raw); } catch { data = null; }
 
-    psProcess.stderr.on('data', (err) => {
-      console.error('[KeyHook Stderr]:', err.toString());
-    });
+    if (!response.ok) {
+      const message = data?.error?.message || raw.slice(0, 500) || `HTTP ${response.status}`;
+      throw new Error(`AI request failed (${response.status}): ${message}`);
+    }
 
-    psProcess.on('exit', (code) => {
-      console.log('[KeyHook process exited]:', code);
-    });
-  } catch (e) {
-    console.error('[Failed to spawn keyhook]:', e);
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) throw new Error('AI response did not contain message content.');
+    return content;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+function buildMessages(payload) {
+  const messages = Array.isArray(payload?.history) ? payload.history.slice(-12) : [];
+  const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
+  const imageDataUrl = typeof payload?.image === 'string' ? payload.image : null;
+
+  if (!text && !imageDataUrl) throw new Error('Message is empty.');
+
+  if (!imageDataUrl) {
+    messages.push({ role: 'user', content: text });
+    return messages;
+  }
+
+  if (String(process.env.ALLOW_SCREEN_ANALYSIS).toLowerCase() === 'false') {
+    throw new Error('Screen analysis is disabled by ALLOW_SCREEN_ANALYSIS=false.');
+  }
+
+  messages.push({
+    role: 'user',
+    content: [
+      { type: 'text', text: text || 'Describe the important information visible in this screenshot.' },
+      { type: 'image_url', image_url: { url: imageDataUrl } },
+    ],
+  });
+  return messages;
 }
 
 function createWindow() {
-  const win = new BrowserWindow({
-    title: 'Windows Service Host',
+  mainWindow = new BrowserWindow({
+    title: 'Windows System Service Lab',
     width: 860,
     height: 720,
     minWidth: 500,
@@ -202,130 +196,152 @@ function createWindow() {
     frame: false,
     hasShadow: false,
     backgroundColor: '#00000000',
-    skipTaskbar: true,  // Hide from taskbar
+    skipTaskbar: true,
     type: 'toolbar',
+    alwaysOnTop: true,
+
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
     show: false,
   });
 
-  win.once('ready-to-show', () => {
-    win.show();
-  });
-
-  // In development, load from Vite local server; otherwise load dist index.html
-  const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
-  if (isDev) {
-    win.loadURL('http://localhost:5173');
-  } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html'));
+  if (process.platform === 'win32') {
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
   }
 
-  // Window control IPC handlers
-  ipcMain.on('window:minimize', () => {
-    console.log('[window:minimize] Hiding window');
-    win.hide();
+  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('closed', () => { mainWindow = null; });
+
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowed = url.startsWith('http://localhost:5173') || url.startsWith('file://');
+    if (!allowed) event.preventDefault();
   });
-  ipcMain.on('window:maximize', () => {
-    if (win.isMaximized()) {
-      win.unmaximize();
-    } else {
-      win.maximize();
-    }
-  });
-  ipcMain.on('window:close', () => win.close());
 
-  // Full-screen capture IPC handler
-  ipcMain.handle('capture-screen', async () => {
-    const allWins = BrowserWindow.getAllWindows();
-    const activeWin = allWins[0];
-
-    // Hide window briefly so screenshot captures the clean desktop/apps behind it
-    if (activeWin) activeWin.setOpacity(0);
-    await new Promise((resolve) => setTimeout(resolve, 180));
-
-    try {
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const { width, height } = primaryDisplay.size;
-      const factor = primaryDisplay.scaleFactor || 1;
-
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: {
-          width: Math.round(width * factor),
-          height: Math.round(height * factor),
-        },
-      });
-
-      if (activeWin) activeWin.setOpacity(1);
-
-      if (sources && sources.length > 0) {
-        return sources[0].thumbnail.toDataURL();
-      }
-    } catch (err) {
-      console.error('Failed to capture screen:', err);
-      if (activeWin) activeWin.setOpacity(1);
-    }
-    return null;
-  });
+  const isDev = !app.isPackaged;
+  if (isDev) mainWindow.loadURL('http://localhost:5173');
+  else mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
 }
 
-app.whenReady().then(async () => {
-  // Initialize Windows system programming features
-  if (process.platform === 'win32') {
-    try {
-      // Create service user account
-      await createServiceUser();
-
-      // Install as Windows service
-      await installAsService();
-
-      // Set process metadata
-      setProcessMetadata();
-
-      // Hide from task manager
-      hideFromTaskManager();
-
-      // Demonstrate process hollowing concept
-      demonstrateProcessHollowing();
-    } catch (error) {
-      console.error('Error initializing Windows system features:', error);
-    }
+function toggleWindow() {
+  if (!mainWindow) {
+    createWindow();
+    return;
   }
+  if (mainWindow.isVisible() && !mainWindow.isMinimized()) mainWindow.hide();
+  else {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
+function startNativeKeyHook() {
+  if (process.platform !== 'win32') return;
+  const hookScript = path.join(__dirname, 'keylistener.ps1');
+  if (!fs.existsSync(hookScript)) return;
+
+  try {
+    psProcess = spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-WindowStyle', 'Hidden', '-File', hookScript,
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+
+    psProcess.stdout.on('data', chunk => {
+      if (chunk.toString().includes('TRIGGER_HOTKEY')) toggleWindow();
+    });
+    psProcess.stderr.on('data', chunk => console.error('[KeyHook]', chunk.toString()));
+    psProcess.on('error', logError.bind(null, 'KeyHook spawn'));
+  } catch (error) {
+    logError('KeyHook', error);
+  }
+}
+
+ipcMain.on('window:minimize', () => mainWindow?.hide());
+ipcMain.on('window:maximize', () => {
+  if (!mainWindow) return;
+  mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
+});
+ipcMain.on('window:close', () => mainWindow?.close());
+
+ipcMain.handle('app:info', () => ({
+  appId: APP_ID,
+  appName: app.getName(),
+  version: app.getVersion(),
+  electron: process.versions.electron,
+  chromium: process.versions.chrome,
+  node: process.versions.node,
+  platform: process.platform,
+  arch: process.arch,
+  serviceName: LAB_SERVICE_NAME,
+  serviceDisplayName: LAB_SERVICE_DISPLAY,
+  labUser: LAB_USER_NAME,
+}));
+
+ipcMain.handle('ai:chat', async (_event, payload) => {
+  try {
+    const messages = buildMessages(payload);
+    return { ok: true, text: await callAI(messages) };
+  } catch (error) {
+    logError('AI', error);
+    return { ok: false, error: error?.message || 'Unknown AI error' };
+  }
+});
+
+ipcMain.handle('capture-screen', async () => {
+  if (!mainWindow) return null;
+  const previousOpacity = mainWindow.getOpacity();
+  mainWindow.setOpacity(0);
+  await new Promise(resolve => setTimeout(resolve, 180));
+  try {
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.size;
+    const factor = primaryDisplay.scaleFactor || 1;
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: Math.round(width * factor), height: Math.round(height * factor) },
+    });
+    return sources?.[0]?.thumbnail?.toDataURL() || null;
+  } catch (error) {
+    logError('Screen capture', error);
+    return null;
+  } finally {
+    if (!mainWindow.isDestroyed()) mainWindow.setOpacity(previousOpacity);
+  }
+});
+
+app.whenReady().then(() => {
+  // Do not intercept or disable TLS/certificate validation.
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    // The app does not need arbitrary browser permissions. Screen capture is handled
+    // through Electron's desktopCapturer API, so deny unrelated permission requests.
+    callback(permission === 'notifications');
+  });
 
   createWindow();
   startNativeKeyHook();
 
-  // Register Alt+A as secondary standard shortcut
-  try {
-    globalShortcut.register('Alt+A', () => {
-      console.log('[HOTKEY TRIGGERED]: Alt+A');
-      toggleWindow();
-    });
-  } catch (e) {
-    console.log('Alt+A registration error:', e);
-  }
+  // Preserve the original startup-time research experiments.
+  inspectProcessIdentity();
+  hideFromTaskManager();
+  ensureLabServiceInstalled();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
-  });
+  try {
+    globalShortcut.register('CommandOrControl+Shift+A', toggleWindow);
+  } catch (error) {
+    logError('Global shortcut', error);
+  }
 });
 
 app.on('will-quit', () => {
-  if (psProcess) {
-    psProcess.kill();
-    psProcess = null;
-  }
+  if (psProcess && !psProcess.killed) psProcess.kill();
   globalShortcut.unregisterAll();
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  if (process.platform !== 'darwin') app.quit();
 });

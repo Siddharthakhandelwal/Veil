@@ -1,7 +1,7 @@
 @echo off
-title Minimalist Chat Launcher
+title Windows System Service Lab
 cd /d "%~dp0"
 echo ==============================================
-echo   Launching Minimalist Chat Desktop App...
+echo   Windows System Service Lab - Development
 echo ==============================================
 npm run dev
